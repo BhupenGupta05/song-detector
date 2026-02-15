@@ -257,7 +257,7 @@ async function recognizeWithRapidAPI(audioBuffer) {
       console.log(`Album:  ${detectedTrack.sections?.[0]?.metadata?.[0]?.text || 'N/A'}`);
       if (detectedTrack.share?.href) console.log(`Link:   ${detectedTrack.share.href}`);
 
-      (async () => {
+      const youtubePromise = (async () => {
         const ytStart = now();
         const youtubeVideoId = await searchYouTubeVideo(
           detectedTrack.title,
@@ -266,11 +266,13 @@ async function recognizeWithRapidAPI(audioBuffer) {
 
         console.log("YouTube search time:", now() - ytStart, "ms");
 
-
         if (youtubeVideoId) {
           await getYouTubeRecommendations(youtubeVideoId);
         }
-      })
+      })();
+
+      await youtubePromise;
+
 
 
 
