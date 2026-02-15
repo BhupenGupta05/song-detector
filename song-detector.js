@@ -257,19 +257,22 @@ async function recognizeWithRapidAPI(audioBuffer) {
       console.log(`Album:  ${detectedTrack.sections?.[0]?.metadata?.[0]?.text || 'N/A'}`);
       if (detectedTrack.share?.href) console.log(`Link:   ${detectedTrack.share.href}`);
 
+      (async () => {
+        const ytStart = now();
+        const youtubeVideoId = await searchYouTubeVideo(
+          detectedTrack.title,
+          detectedTrack.subtitle
+        );
 
-      const ytStart = now();
-      const youtubeVideoId = await searchYouTubeVideo(
-        detectedTrack.title,
-        detectedTrack.subtitle
-      );
-
-      console.log("YouTube search time:", now() - ytStart, "ms");
+        console.log("YouTube search time:", now() - ytStart, "ms");
 
 
-      if (youtubeVideoId) {
-        await getYouTubeRecommendations(youtubeVideoId);
-      }
+        if (youtubeVideoId) {
+          await getYouTubeRecommendations(youtubeVideoId);
+        }
+      })
+
+
 
     } else {
       console.log('No match found.');
