@@ -16,6 +16,21 @@
 // Optional: delete recorded PCM file
 // Exit process
 
+// === Circular Buffer Settings ===
+const SAMPLE_RATE = 44100;
+const CHANNELS = 1;
+const BYTES_PER_SAMPLE = 2;
+const BUFFER_SECONDS = 4;
+
+const BUFFER_SIZE =
+  SAMPLE_RATE *
+  CHANNELS *
+  BYTES_PER_SAMPLE *
+  BUFFER_SECONDS;
+
+let circularBuffer = Buffer.alloc(BUFFER_SIZE);
+let writeOffset = 0;
+let ffmpegProcess = null;
 
 function now() {
   return Date.now();
@@ -26,7 +41,7 @@ const { execSync, exec } = require('child_process');
 const fs = require('fs');
 const axios = require('axios');
 
-const OUTPUT_FILE = 'recorded.pcm';
+const OUTPUT_FILE = 'recorded.pcm'; // Not necessary
 const BLACKHOLE_NAME = 'BlackHole 2ch';
 const RECORD_DURATION = 4; // 4s is ideal for detection
 
@@ -58,29 +73,64 @@ function switchInput(device) {
   }
 }
 
+
+function getSnapshot() {
+  const snapshot = Buffer.alloc(BUFFER_SIZE);
+
+  const endPart = circularBuffer.slice(writeOffset);
+  const startPart = circularBuffer.slice(0, writeOffset);
+
+  endPart.copy(snapshot, 0);
+  startPart.copy(snapshot, endPart.length);
+
+  return snapshot;
+}
+
+function writeChunkToCircularBuffer(chunk) {
+  let remaining = chunk.length;
+  let chunkOffset = 0;
+
+  while (remaining > 0) {
+    const spaceUntilEnd = BUFFER_SIZE - writeOffset;
+    const bytesToWrite = Math.min(spaceUntilEnd, remaining);
+
+    chunk.copy(
+      circularBuffer,
+      writeOffset,
+      chunkOffset,
+      chunkOffset + bytesToWrite
+    );
+
+    writeOffset = (writeOffset + bytesToWrite) % BUFFER_SIZE;
+    chunkOffset += bytesToWrite;
+    remaining -= bytesToWrite;
+  }
+}
+
+
 // Updated recordAudio function (Builds the format which Shazam expects and executes via exec (async) to avoid blocking the event loop. Logs file size after recording.)
-function recordAudio(duration) {
-  return new Promise((resolve, reject) => {
+function startContinuousRecording(duration) {
 
-    const cmd = `
-      ffmpeg -f avfoundation 
-      -i ":0" 
-      -t ${duration} 
-      -ac 1 
-      -ar 44100 
-      -acodec pcm_s16le 
-      -f s16le 
-      -loglevel quiet 
-      pipe:1
-    `.replace(/\s+/g, ' ');
+  const cmd = `
+    ffmpeg -f avfoundation
+    -i ":0"
+    -ac 1
+    -ar 44100
+    -acodec pcm_s16le
+    -f s16le
+    -loglevel quiet
+    pipe:1
+  `.replace(/\s+/g, ' ');
 
-    exec(cmd, { encoding: 'buffer', maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
-      if (err) return reject(err);
+  ffmpegProcess = exec(cmd, { encoding: 'buffer', maxBuffer: 50 * 1024 * 1024 })
 
-      console.log("Recording complete (memory mode)");
-      resolve(stdout); // return raw PCM buffer
-    });
-  });
+  ffmpegProcess.stdout.on('data', (chunk) => {
+    writeChunkToCircularBuffer(chunk);
+  })
+
+  ffmpegProcess.on('error', (err) => {
+    console.error("FFmpeg error: ", err);
+  })
 }
 
 
@@ -259,12 +309,19 @@ async function main() {
     switchInput(BLACKHOLE_NAME);
     console.log("Switch time:", now() - switchStart, "ms");
 
+    console.log("Starting continuous recording...");
+    startContinuousRecording();
+
+    // Let buffer warm up
+    console.log("Warming up buffer...");
+    await new Promise(resolve => setTimeout(resolve, BUFFER_SECONDS * 1000));
+
     await waitForKeypress();
+
+    console.log("Capturing last 4 seconds instantly...");
     const totalStart = now();
 
-    const recordStart = now();
-    const audioBuffer = await recordAudio(RECORD_DURATION);
-    console.log("Record time:", now() - recordStart, "ms");
+    const audioBuffer = getSnapshot();
 
     const apiStart = now();
     await recognizeWithRapidAPI(audioBuffer);
@@ -273,6 +330,9 @@ async function main() {
     console.log("TOTAL:", now() - totalStart, "ms");
 
   } finally {
+    if (ffmpegProcess) {
+      ffmpegProcess.kill('SIGINT');
+    }
     switchInput(originalInput);
     process.exit(0);
   }
